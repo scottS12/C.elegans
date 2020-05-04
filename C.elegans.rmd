@@ -1,0 +1,300 @@
+---
+title: "An Exploration of *Caenorhabditis elegans* Neuronal Network"
+author: "Scott T. Seidenberger"
+date: "18 April 2020"
+output: html_document
+---
+
+# Background
+
+*Caenorhabditis elegans*, or C.elegans, is a transparent nematode (roundworm) that grows to about 1mm in length. As a model organism, this roundworm has served the scientific community well in researching cell biology and other emerging disciplines in biology. In particular, it was the first multicellur organism that has had its entire genome sequenced. Additionally, as of this writing, it is the only organism to have a complete connectome. A connectome is essentially a wiring diagram of a neural network, which includes all of the neurons and synapses in an organism's nervous system. Researchers, through electron microscopy, have been able to fully map the connectome of C.elegans, which is an important first step in the discipline of connectomics, which is the emerging study of both creating connectomes and analyzing them. Best described by Dr. Eric Jonas (Comp. Sci, Univ. of Chicago), "Reverse-engineering the most complex processor in the universe could be much easier if we had a complete schematic of the computing elements and how they interconnect."
+
+Through the analysis of connectomes, we can direct further research in neuroscience, medicine, and computer science. For example, the study of smaller connectomes from smaller organisms can help researchers infer properties of larger connectomes. Additionally, results from connectomic studies can be passed to neuroscientists and cell biologists who can then focus their expertise towards specific, targeted areas of the nervous system. For medicine, identifications of anomalies in an individual's wiring can be leading indicators of certain disorders. Also, current research is showing significant differences in the connectomes between sexes, which could deepen our understanding of human development and behavioral psychology. 
+
+My personal interest in this topic is in developing techniques for analyzing and interpreting connectomes. As the technology and tools progress such that we can create more complete connectomes of varying species, we need a basis through which we can draw meaningful insights from these large graphs. For example, we know there are large differences in how cephalopods (octopuses, squid, and nautiluses) have developed intelligence independent of vertebrates, and comparing the network architecture between these two groups of intelligent animals could provide important breakthroughs in how we study intelligence, information processing, and neural architecture for artificial intelligence. This biomimetic approach is already revolutionizing computing, and there is still much to be discovered. 
+
+This network visualization and associated analysis is of the connectome of C.elegans. The purpose of visualizing the network is to help develop intuition of a living and complete neural network. As networks increase in size, human pattern recognition can be leveraged by visualizing the graph, complementing descriptive analytic metrics. 
+
+# Data
+
+The source of data for this project comes from *NeuroData.io*, which is a consortium of researchers dedicated to the mission to "Understand and improve animal and machine intelligences worldwide." In 2011, they launched the Open Connectome Project, which has the goal of democratizing access to large-scale neuro data. The data is packaged as a GraphML, which is a widely used XML based file-format for large graphs of all kinds. This connectome is of the hermaphroditic C.elegans was made possible by the work continued by Varshney, Chen, Paniaqua, Hall and Chklovskii in "Structural properties of the C. elegans neuronal network" (PLoS Comput. Biol. Feb 3, 2011 3:7:e1001066 (doi:10.1371/journal.pcbi.1001067)).
+
+(https://neurodata.io/project/connectomes/)
+(https://s3.amazonaws.com/connectome-graphs/worm/c.elegans.herm_pharynx_1.graphml)
+
+The following code snippet makes sure that the libraries used in the notebook are available on the host machine, if a library is not installed, the function will attempt to install it. 
+
+```{r EnsurePackage}
+EnsurePackage<-function(x)
+{
+  x<-as.character(x)
+  #
+  if (!require(x,character.only=TRUE))
+  {
+    install.packages(pkgs=x,dependencies = TRUE)
+    require(x,character.only=TRUE)
+  }
+}
+```
+
+The working directory is set to the location of the R Notebook, where the source data should be co-located. This method assumes that the script is being run inside the RStudio IDE. Next, the source data is read-in and converted to an igraph network object. 
+
+```{r message=FALSE, "Pull Data"}
+#setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+EnsurePackage("igraph")
+library(igraph)
+
+graph.raw <- read_graph("c.elegans.herm_pharynx_1.graphml", format = "graphml")
+summary(graph.raw)
+```
+
+### Dataset Exploration 
+
+```{r message=FALSE, Explore}
+frame <- as_data_frame(graph.raw, what = "both")
+head(frame[["vertices"]])
+head(frame[["edges"]])
+
+library(Hmisc)
+Hmisc::describe(frame[["vertices"]])
+Hmisc::describe(frame[["edges"]])
+```
+
+The original graph object contains 279 neurons and 3,225 synapses. For the neurons, the dataset provides a name (step id), the formal cell name, the cell's class, the neuron's horizontal position along the body (soma_pos) in a range from 0 to 1, the type of neurotransmitter present on the cell, the defined role of the neuron (sensory, motor, or interneuron), and another id field. For each synapse, it provides the directional "to" and "from" for the neuron it connects, the synapse type (either electrical or chemical), and the weight of the synapse. 
+
+### Data Cleaning and Preparation
+
+For this project, the chemical synapse network will be visualized and analyzed. Chemical synapses, unlike their electrical counterparts, can change the intensity of the signal that is passed between neurons. This gives chemical synaptic edges a "weight", or gain, and also produces directionality in the network. Because the chemical synapse has both weight and directionality, it plays a key role in learning and memory. These properties make the chemical synapse network the choice for this project, meaning that the electrical synaptic edges will be removed. The chemical synapses make up about 68% of the edges in the original graph. Synapses with a weight of 1 have been selected for filtering in the visualization, but will be included in the calculation of various network metrics in the analysis section. Additionally, we are only interested in neurons that send and/or receive information with the rest of the network, therefore only the main component of the graph will be retained (there are a few isolated neurons that need removal). 
+
+```{r Data Clean and Prepare}
+#id is redundant
+graph.clean <- delete_vertex_attr(graph.raw, "id")
+
+#neurotrasmitters is not useful for this analysis
+graph.clean <- delete_vertex_attr(graph.raw, "neurotransmitters")
+
+#remove graph attributes as we received these from a data description document
+graph.clean <- delete_graph_attr(graph.clean, "sensor")
+graph.clean <- delete_graph_attr(graph.clean, "region")
+graph.clean <- delete_graph_attr(graph.clean, "source")
+graph.clean <- delete_graph_attr(graph.clean, "info")
+
+#remove the electrical synapses, we are interested in the chemical ones
+graph.clean <- delete.edges(graph.clean, which(E(graph.clean)$synapse_type == "E"))
+
+#distribution of edge weights
+hist(E(graph.clean)$weight, main = "Histogram of Edge Weights")
+sum(E(graph.clean)$weight == 1)
+sum(E(graph.clean)$weight > 1)
+
+graph.full <- graph.clean
+
+#remove edges with weight of 1 to simplify the visualization and focus on the more important cells
+graph.clean <- delete.edges(graph.clean, which(E(graph.clean)$weight==1))
+
+#remove isolates, they are not connected to the neural network
+isos = which(degree(graph.clean)==0)
+graph.clean = delete.vertices(graph.clean, isos)
+
+```
+
+A summary of the final graph data that will be visualized shows that there will be 276 neurons and 946 synapses. 
+
+```{r}
+summary(graph.clean)
+```
+
+
+# Network Visualization
+
+visNetwork is the package chosen to create the interactive visualizations of the neural network. Due to the size of this network, particularly with the large number of edges, it is important to consider performance when making design choices for the visualization. This is mostly in how the layout is calculated. igraph can precalculate the layout coordinates for the graph, which essentially creates static graph. visNetwork can also calculate the layout of the network using a simple gravity model that works on repulsion using the node "mass" and edge weight. The latter is comparatively more computationally intensive, but can prove more interactive for the user.  
+
+Nodes are colored by their cell role: Green for sensory neurons, blue for interneurons, and red for motor neurons. Color is an intuitive way to quickly identify a neuron by its function. 
+
+Edge weights are scaled by their weight factor, which is derived from the number of contacts the chemical synapse makes between the neurons. Additionally, if an edge weight is two standard deviations greater than the mean edge weight present in the graph, the edges are highlighted orange. 
+
+```{r Initial visNetwork Setup}
+EnsurePackage("visNetwork")
+library(visNetwork)
+
+#get the igraph network to the visNetwork format
+data <- toVisNetworkData(graph.clean)
+
+graph.clean <- (simplify(graph.clean, remove.multiple = TRUE, remove.loops = TRUE))
+is.simple(graph.clean)
+#visIgraph(graph.clean)
+
+#highlight those edges with weights that are greater than 2 sigmas
+edgeWeight_Sd <- sd(E(graph.clean)$weight)
+edgeWeight_mean <- mean(E(graph.clean)$weight)
+data$edges["color"] <- ifelse(E(graph.clean)$weight > edgeWeight_mean+2*edgeWeight_Sd, "orange", "gray")
+
+#scale the width of edges by weight
+names(data$edges)[names(data$edges) == "weight"] <- "width"
+
+#color vertexes by their role (Green = Sensort, Motor = Red, Interneuron = Blue)
+data$nodes["color"] = ifelse(V(graph.clean)$role == "S", "green", ifelse(frame$vertices["role"] == "M", "red", "blue"))
+
+#create tooltips for the cell name
+data$nodes["label"] <- NULL
+data$nodes["title"] <- data$nodes["cell_name"]
+
+#igraph "lgl" layout for optimizing larger graphs
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visIgraphLayout(layout = "layout_with_lgl") %>%
+  visEdges(arrows = "to") %>%
+  visLayout(randomSeed = 1029)
+```
+
+We can also collapse neurons into their cell class if there is a need to reduce the number of neurons visualized. This technique could be applied to much larger connectomes. 
+
+```{r Group by Cell Class}
+#group by cell class
+data$nodes["group"] <- data$nodes["cell_class"]
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visIgraphLayout(layout = "layout_with_lgl") %>%
+  visEdges(arrows = "to") %>%
+  visClusteringByGroup(groups = unlist(unique(data$nodes["group"]), use.names=FALSE)) %>%
+  visLayout(randomSeed = 1029)
+```
+
+Barnes-Hut gravity model for interaction:
+
+```{r}
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visEdges(arrows = "to") %>%
+  visLayout(randomSeed = 1029)
+```
+
+# Analysis
+
+Now that the basis for visualizing the network has been established, there are several analytical questions that can be addressed. The motivations for these questions are derived in the background section of this project, and are driven by trying to understand both general truths about this connectome and certain properties of it that can drive future research. 
+
+### Topographical
+
+First, we'll examine overall topographical characteristics of the network to answer the following questions:
+
+**What is the general structure of this connectome?**
+
+**Does the overall network exhibit small-world network properties?**
+
+```{r}
+#size
+size <- length(V(graph.full))
+
+#average distance
+avgDist <- mean_distance(graph.full)
+
+#diameter
+diameter <- diameter(graph.full)
+
+topography <- matrix(c(size, avgDist, diameter), nrow = 1, ncol = 3)
+colnames(topography) <- c("Size", "Average Distance", "Diameter")
+as.table(topography)
+```
+
+The average distance between nodes is about 3.5, which is generally consistent with a three layer hierarchical network, which is observed here. Basic neural networks will many times follow a feed-forward information flow. In this case, sensory neurons receive information, and then it is passed to interneurons to motor neurons to translate into physical action. Furthermore, this low average path length is one indication that the network may be a small-world network. Next, we'll examine measures of centralization and interconnectedness. 
+
+One of the key features that helps describe its general structure is its physical topology. The horizontal layout by soma position illustrates the topological relationship between cell class and its position within the body. Sensory neurons hold positions in the head and tail, which are then largely connected to interneurons that are also predominantly located in between the sensory and motor neurons. There are a few motor neurons in both the head and tail, but the majority are distributed along the body. Also, the topology shows that the majority of the strongest synapses (highlighted orange) connect the motor neurons along the body. 
+
+```{r}
+EnsurePackage("sm")
+library(sm)
+soma <- as.numeric(unlist(data$nodes["soma_pos"]))
+roles <- as.factor(unlist(data$nodes["role"]))
+sm.density.compare(soma, roles, col=c("red","blue", "green"), xlab="Horizontal Soma Position")
+title(main="Neuron Horizontal Position Distribution by Neural Role")
+```
+
+The somatic neuron position, or "soma_pos", provides a way to view the neural network in relation to how the neurons are actually arranged within C.Elegans. The dataset provides this information as the horizontal position of the neuron within the worm from 0 to 1. Putting it all together:
+
+```{r}
+#with soma horitzonal geography
+data$nodes["level"] <- V(graph.clean)$soma_pos
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visHierarchicalLayout(direction = "LR",levelSeparation = 10000) %>%
+  visEdges(arrows = "to") %>%
+  visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(centralGravity=1, damping=2, springConstant=.1)) %>%
+  visLayout(randomSeed = 1029)
+```
+
+This layout is important to understanding key properties of this network, because it grounds the visualization by real-world topography. Additionally, the physics settings were chosen in such a way to enable the user to interact with individual neurons along the body. The overall physics model is the vis.js hierarchical repulsion model, that preserves the left-to-right positions of the neurons. The "central gravity" and "damping" constants are much higher than the defaults, which holds the main network graph in place as the user drags individual neurons vertically along the y-axis of the graph. The "spring constant" is also increased, so that the relationship between the selected neuron and its neighbors is highlighted. 
+
+**Which neurons play the biggest roles as bridges for passing information from sensory neurons to motor neurons?**
+
+```{r}
+V(graph.clean)$betweenness <- betweenness(graph.clean, directed = TRUE, normalized = TRUE)
+data$nodes["size"] <- V(graph.clean)$betweenness*300
+
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visIgraphLayout(layout = "layout_with_lgl") %>%
+  visEdges(arrows = "to") %>%
+  visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(centralGravity=1, damping=2, springConstant=.1)) %>%
+  visLayout(randomSeed = 1029)
+```
+
+From the above graph, it is clear that the *AVA* class of neuron (both AVAL and AVAR) serves as a crucial bridge in the network. With the largest betweenness centrality, this class of neurons are part of the most shortest paths between other neurons in the network. This not only illustrates the importance of interneurons in the pharynx (head) of C.elegans, but also that information flows predominantly through a relatively small number of key neurons. 
+
+
+### Cohesive Subgroups
+
+Another key aspect of understanding this neural network is how the neurons form cohesive subgroups. From neuroscience, we know that neurons typically form ganglia, which are clusters of neurons that serve as intermediaries between the different neurological structures in the system. Community detection could prove useful in identifying neural structure, which would help to explain the functions of different parts of the system. Within nervous systems, we know that different structures emerge that serve certain specialized functions, so lets look to how a common community detection algorithm could shed light on how the neurons in the C.elegans connectome are structured. 
+
+**Is community structure present in the C.elgans neural network? If so, could this property be used to help understand the metastructure of this network?**
+
+```{r}
+community <- cluster_fast_greedy(as.undirected(graph.clean), merges = FALSE, modularity = FALSE,
+  membership = TRUE, weights = E(graph.clean)$weight)
+data$nodes["community"] <- community$membership
+
+data$nodes["size"] <- 10
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visHierarchicalLayout(direction = "LR",levelSeparation = 10000) %>%
+  visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(centralGravity=1, damping=2, springConstant=.1)) %>%
+  visEdges(arrows = "to") %>%
+  visOptions(selectedBy = "community") %>%
+  visLayout(randomSeed = 1029)
+```
+
+The results indicate that there is some community structure present, which is consistent with what has been observed in the laboratory. For example, community #6 highlights 30 neurons, most of which are well connected motor neurons with high edge weights between them. The interneuron located in the anterior section (head) of this community is *AVAR*, which according to the WormAtlas, has "large-diameter axons that run the entire length of the ventral nerve cord and provide input to the ventral cord motor neurons." Particularly, it is has been identified to aid in commanding backward locomotion. 
+
+Another example is community #7, which includes several sensory neurons in the posterior (tail) connected to motor neurons along the body. One of these sensory neurons is *PVCL*, which "modulates response to harsh touch to the tail." Another is *PHCL*, a thermonociceptor that helps C.elegans detect and respond to adverse temperatures, driving forward locomotion. This community could represent sensory and command interneurons that are well connected to motor neurons that drive forward locomotion as C.elegans responds to environmental stimuli. These examples provide some evidence that simple community detection algorithms (here a fast-greedy algorithm was used) can reveal some metastrcuture within this connectome.
+
+### Structural Holes
+
+Information flow is a key component in understanding neural networks. For biological neural networks, understanding those neurons or types of neurons that broker information between other structures in the network is helpful in understanding how the network functions as a whole. For C.elegans, we already know the basic role of each of the neurons, which helps in testing a hypothesis that interneurons have low constraint, and serve as key brokers of information flow within the network. Additionally, identifying which neurons fill structural holes within a biological neural network can highlight areas of the system that if damaged, could seriously impair a function or many functions of the organism. 
+
+**Which physical areas and neurons of C.elegans' neural network fill structural holes within the overall network?**
+
+**Do interneurons, as a class, serve a brokerage role in the network? Additionally, does constraint serve as a potential predictor of an interneuron?**
+
+```{r}
+constraint = constraint(graph.clean)
+data$nodes["size"] <- 40*constraint
+
+visNetwork(data$nodes, data$edges, width = "100%", height = 700) %>% 
+  visHierarchicalLayout(direction = "LR",levelSeparation = 10000) %>%
+  visPhysics(solver = "hierarchicalRepulsion", hierarchicalRepulsion = list(centralGravity=1, damping=2, springConstant=.1)) %>%
+  visEdges(arrows = "to") %>%
+  visOptions(selectedBy = "community") %>%
+  visLayout(randomSeed = 1029)
+
+EnsurePackage("dplyr")
+library(dplyr)
+group_by(data$nodes, role) %>%
+  summarise(
+    count = n(),
+    mean = mean(size, na.rm = TRUE),
+    sd = sd(size, na.rm = TRUE)
+  )
+res.aov <- aov(size ~ role, data = data$nodes)
+summary(res.aov)
+
+TukeyHSD(res.aov)
+
+constraintSize <- as.numeric(unlist(data$nodes["size"]))
+boxplot(constraintSize ~ roles, data = data$nodes, col=c("red","blue", "green"), xlab="Constraint")
+title(main="Neuron Constraint by Neural Role")
+```
+
+From the visualization and the follow-on basic tests performed, it is evident that the interneurons do play an integral role in brokering information from the sensory neurons to the motor neurons. Also, it appears that constraint can be a useful predictive indicator of whether a previously unclassified neuron could be a command interneuron. Additionally, as expected, most of the potential structural holes appear in the head and the small part of the tail, indicating that if these regions were to be damaged or impaired, the motor functions of C.elegans would be severely reduced. For instance, going back to community #6, the neuron AVAR has very low constraint, and is in a key brokerage position within that community. If that neuron were to be damaged or impaired, it is likely that C.elegans would have its backward locomotion response significantly reduced. This analysis illustrates the power of first using community detection algorithms to identify substructures within the network, and then using measures of brokerage to identify key neurons within that community to drive further, more fine-tuned study. 
